@@ -4,7 +4,10 @@ from torch_geometric.utils import to_undirected
 import openmesh as om
 from os import path as osp
 from utils import utils, mesh_sampling
-from psbody.mesh import Mesh
+try:
+    from psbody.mesh import Mesh
+except ImportError:
+    Mesh = None
 import pickle
 
 

@@ -3,7 +3,10 @@ import heapq
 import numpy as np
 import os
 import scipy.sparse as sp
-from psbody.mesh import Mesh
+try:
+    from psbody.mesh import Mesh
+except ImportError:
+    Mesh = None
 
 
 def row(A):

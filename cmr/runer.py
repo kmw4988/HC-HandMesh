@@ -57,7 +57,8 @@ class Runner(object):
         with open(os.path.join(args.work_dir, '../template/MANO_RIGHT.pkl'), 'rb') as f:
             mano = pickle.load(f, encoding='latin1')
         self.j_regressor = np.zeros([21, 778])
-        self.j_regressor[:16] = mano['J_regressor'].toarray()
+        j_reg = mano['J_regressor']
+        self.j_regressor[:16] = j_reg.toarray() if hasattr(j_reg, 'toarray') else j_reg
         for k, v in {16: 333, 17: 444, 18: 672, 19: 555, 20: 744}.items():
             self.j_regressor[k, v] = 1
         self.std = torch.tensor(0.20)

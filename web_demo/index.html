@@ -1,0 +1,548 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>MobRecon Hand Mesh Demo</title>
+    <script src="https://cdn.jsdelivr.net/npm/onnxruntime-web@1.17.0/dist/ort.min.js" crossorigin="anonymous"></script>
+    <script type="importmap">
+        {
+          "imports": {
+            "three": "https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js",
+            "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/"
+          }
+        }
+    </script>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+            background: #1a1a2e;
+            color: #eee;
+            display: flex;
+            height: 100vh;
+            overflow: hidden;
+        }
+
+        #sidebar {
+            width: 260px;
+            background: #16213e;
+            padding: 20px;
+            display: flex;
+            flex-direction: column;
+            gap: 16px;
+            border-right: 1px solid #0f3460;
+        }
+
+        #sidebar h1 {
+            font-size: 18px;
+            color: #e94560;
+            margin-bottom: 4px;
+        }
+
+        #sidebar p {
+            font-size: 12px;
+            color: #999;
+        }
+
+        .btn {
+            display: block;
+            width: 100%;
+            padding: 12px;
+            border: none;
+            border-radius: 8px;
+            font-size: 14px;
+            font-weight: 600;
+            cursor: pointer;
+            transition: background 0.2s;
+        }
+
+        .btn-primary {
+            background: #e94560;
+            color: #fff;
+        }
+
+        .btn-primary:hover {
+            background: #c73550;
+        }
+
+        .btn-secondary {
+            background: #0f3460;
+            color: #fff;
+        }
+
+        .btn-secondary:hover {
+            background: #1a4a8a;
+        }
+
+        .btn:disabled {
+            opacity: 0.5;
+            cursor: not-allowed;
+        }
+
+        #info-panel {
+            margin-top: auto;
+            background: #0f3460;
+            border-radius: 8px;
+            padding: 12px;
+            font-size: 12px;
+        }
+
+        #info-panel .label {
+            color: #999;
+        }
+
+        #info-panel .value {
+            color: #e94560;
+            font-weight: 600;
+        }
+
+        #main {
+            flex: 1;
+            display: flex;
+            flex-direction: column;
+            padding: 20px;
+            gap: 20px;
+            overflow: auto;
+        }
+
+        .panel-title {
+            font-size: 14px;
+            font-weight: 600;
+            color: #999;
+            margin-bottom: 8px;
+        }
+
+        #input-section {
+            position: relative;
+            display: inline-block;
+        }
+
+        #inputCanvas {
+            background: #16213e;
+            border-radius: 8px;
+            border: 1px solid #0f3460;
+        }
+
+        #jointCanvas {
+            position: absolute;
+            top: 0;
+            left: 0;
+            pointer-events: none;
+            border-radius: 8px;
+        }
+
+        #viewer-container {
+            flex: 1;
+            min-height: 300px;
+            background: #16213e;
+            border-radius: 8px;
+            border: 1px solid #0f3460;
+            position: relative;
+        }
+
+        #loading-overlay {
+            display: none;
+            position: fixed;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            background: rgba(0, 0, 0, 0.7);
+            z-index: 100;
+            align-items: center;
+            justify-content: center;
+            font-size: 18px;
+            color: #e94560;
+        }
+
+        #loading-overlay.active {
+            display: flex;
+        }
+
+        #webcam-video {
+            display: none;
+        }
+    </style>
+</head>
+<body>
+
+<div id="loading-overlay">
+    <div>Loading model...</div>
+</div>
+
+<aside id="sidebar">
+    <div>
+        <h1>MobRecon Demo</h1>
+        <p>3D Hand Mesh Reconstruction</p>
+    </div>
+
+    <input type="file" id="fileInput" accept="image/*" hidden>
+    <button class="btn btn-primary" id="uploadBtn">Upload Image</button>
+    <button class="btn btn-secondary" id="webcamBtn">Webcam Capture</button>
+    <button class="btn btn-secondary" id="webcamStopBtn" style="display:none;">Stop Webcam</button>
+
+    <div id="info-panel">
+        <div><span class="label">Status: </span><span class="value" id="statusText">Ready</span></div>
+        <div><span class="label">Inference: </span><span class="value" id="inferenceTime">-</span></div>
+        <div><span class="label">Vertices: </span><span class="value">778</span></div>
+        <div><span class="label">Joints: </span><span class="value">21</span></div>
+    </div>
+</aside>
+
+<main id="main">
+    <div>
+        <div class="panel-title">Input &amp; 2D Joints</div>
+        <div id="input-section">
+            <canvas id="inputCanvas" width="256" height="256"></canvas>
+            <canvas id="jointCanvas" width="256" height="256"></canvas>
+        </div>
+    </div>
+    <div style="flex:1;display:flex;flex-direction:column;">
+        <div class="panel-title">3D Mesh Viewer</div>
+        <div id="viewer-container"></div>
+    </div>
+</main>
+
+<video id="webcam-video" autoplay playsinline></video>
+
+<script type="module">
+    import * as THREE from 'three';
+    import {OrbitControls} from 'three/addons/controls/OrbitControls.js';
+
+    const INPUT_SIZE = 128;
+    const DISPLAY_SIZE = 256;
+    const NUM_VERTS = 778;
+    const NUM_JOINTS = 21;
+    const DENORM_FACTOR = 0.2;
+
+    const JOINT_CONNECTIONS = [
+        [0, 1], [1, 2], [2, 3], [3, 4],
+        [0, 5], [5, 6], [6, 7], [7, 8],
+        [0, 9], [9, 10], [10, 11], [11, 12],
+        [0, 13], [13, 14], [14, 15], [15, 16],
+        [0, 17], [17, 18], [18, 19], [19, 20]
+    ];
+    const JOINT_COLORS = [
+        '#e94560', '#e94560', '#e94560', '#e94560', '#e94560',
+        '#ff9a3c', '#ff9a3c', '#ff9a3c', '#ff9a3c',
+        '#00d2ff', '#00d2ff', '#00d2ff', '#00d2ff',
+        '#a8e063', '#a8e063', '#a8e063', '#a8e063',
+        '#c471ed', '#c471ed', '#c471ed', '#c471ed'
+    ];
+
+    let session = null;
+    let faces = null;
+    let webcamStream = null;
+    let webcamAnimId = null;
+
+    // Three.js
+    let scene, camera, renderer, controls, meshObj;
+
+    const inputCanvas = document.getElementById('inputCanvas');
+    const inputCtx = inputCanvas.getContext('2d');
+    const jointCanvas = document.getElementById('jointCanvas');
+    const jointCtx = jointCanvas.getContext('2d');
+    const statusText = document.getElementById('statusText');
+    const inferenceTime = document.getElementById('inferenceTime');
+
+    // --- Init Three.js ---
+    function initThreeJS() {
+        const container = document.getElementById('viewer-container');
+        const w = container.clientWidth;
+        const h = container.clientHeight;
+
+        scene = new THREE.Scene();
+        scene.background = new THREE.Color(0x16213e);
+
+        camera = new THREE.PerspectiveCamera(45, w / h, 0.01, 100);
+        camera.position.set(0, 0, 0.5);
+
+        renderer = new THREE.WebGLRenderer({antialias: true});
+        renderer.setSize(w, h);
+        renderer.setPixelRatio(window.devicePixelRatio);
+        container.appendChild(renderer.domElement);
+
+        controls = new OrbitControls(camera, renderer.domElement);
+        controls.enableDamping = true;
+        controls.dampingFactor = 0.1;
+
+        const ambientLight = new THREE.AmbientLight(0xffffff, 0.6);
+        scene.add(ambientLight);
+        const dirLight = new THREE.DirectionalLight(0xffffff, 0.8);
+        dirLight.position.set(1, 1, 1);
+        scene.add(dirLight);
+        const dirLight2 = new THREE.DirectionalLight(0xffffff, 0.3);
+        dirLight2.position.set(-1, -1, -1);
+        scene.add(dirLight2);
+
+        window.addEventListener('resize', () => {
+            const w2 = container.clientWidth;
+            const h2 = container.clientHeight;
+            camera.aspect = w2 / h2;
+            camera.updateProjectionMatrix();
+            renderer.setSize(w2, h2);
+        });
+
+        function animate() {
+            requestAnimationFrame(animate);
+            controls.update();
+            renderer.render(scene, camera);
+        }
+
+        animate();
+    }
+
+    // --- Load face data & model ---
+    async function init() {
+        document.getElementById('loading-overlay').classList.add('active');
+        statusText.textContent = 'Loading...';
+
+        try {
+            const resp = await fetch('hand_data.json');
+            const data = await resp.json();
+            faces = data.faces;
+
+            ort.env.wasm.numThreads = Math.min(navigator.hardwareConcurrency || 4, 4);
+            ort.env.wasm.simd = true;
+            ort.env.wasm.proxy = true;
+
+            ort.env.wasm.wasmPaths = 'https://cdn.jsdelivr.net/npm/onnxruntime-web@1.17.0/dist/';
+            session = await ort.InferenceSession.create('mobrecon_densestack.onnx', {
+                executionProviders: ['wasm'],
+                graphOptimizationLevel: 'all',
+                enableCpuMemArena: true,
+                enableMemPattern: true,
+                freeDimensionOverrides: {batch: 1},
+            });
+
+            statusText.textContent = 'Ready';
+        } catch (e) {
+            statusText.textContent = 'Load failed';
+            console.error(e);
+            alert('Failed to load model or hand data. Make sure mobrecon_densestack.onnx and hand_data.json are in the same directory.');
+        }
+
+        document.getElementById('loading-overlay').classList.remove('active');
+    }
+
+    // --- Preprocess image ---
+    function preprocessImage(canvas) {
+        const tmpCanvas = document.createElement('canvas');
+        tmpCanvas.width = INPUT_SIZE;
+        tmpCanvas.height = INPUT_SIZE;
+        const tmpCtx = tmpCanvas.getContext('2d');
+        tmpCtx.drawImage(canvas, 0, 0, INPUT_SIZE, INPUT_SIZE);
+
+        const imageData = tmpCtx.getImageData(0, 0, INPUT_SIZE, INPUT_SIZE);
+        const pixels = imageData.data;
+        const float32Data = new Float32Array(3 * INPUT_SIZE * INPUT_SIZE);
+
+        for (let i = 0; i < INPUT_SIZE * INPUT_SIZE; i++) {
+            const r = pixels[i * 4] / 255.0;
+            const g = pixels[i * 4 + 1] / 255.0;
+            const b = pixels[i * 4 + 2] / 255.0;
+            float32Data[i] = (r - 0.5) / 0.5;                          // R channel
+            float32Data[INPUT_SIZE * INPUT_SIZE + i] = (g - 0.5) / 0.5; // G channel
+            float32Data[2 * INPUT_SIZE * INPUT_SIZE + i] = (b - 0.5) / 0.5; // B channel
+        }
+
+        return new ort.Tensor('float32', float32Data, [1, 3, INPUT_SIZE, INPUT_SIZE]);
+    }
+
+    // --- Run inference ---
+    async function runInference(sourceCanvas) {
+        if (!session) return;
+
+        statusText.textContent = 'Running...';
+
+        // Draw to display canvas
+        inputCtx.clearRect(0, 0, DISPLAY_SIZE, DISPLAY_SIZE);
+        inputCtx.drawImage(sourceCanvas, 0, 0, DISPLAY_SIZE, DISPLAY_SIZE);
+
+        const inputTensor = preprocessImage(sourceCanvas);
+
+        const t0 = performance.now();
+        const results = await session.run({input: inputTensor});
+        const t1 = performance.now();
+        inferenceTime.textContent = `${(t1 - t0).toFixed(1)} ms`;
+
+        const meshPred = results.mesh_pred.data;   // [1, 778, 3]
+        const uvPred = results.uv_pred.data;       // [1, 21, 2]
+
+        // Denormalize vertices (flip Y axis)
+        const vertices = new Float32Array(NUM_VERTS * 3);
+        for (let i = 0; i < NUM_VERTS; i++) {
+            vertices[i * 3] = meshPred[i * 3] * DENORM_FACTOR;
+            vertices[i * 3 + 1] = -meshPred[i * 3 + 1] * DENORM_FACTOR;
+            vertices[i * 3 + 2] = meshPred[i * 3 + 2] * DENORM_FACTOR;
+        }
+
+        // Draw 2D joints
+        drawJoints(uvPred);
+
+        // Update 3D mesh
+        updateMesh(vertices);
+
+        statusText.textContent = 'Done';
+    }
+
+    // --- Draw 2D joint overlay ---
+    function drawJoints(uvPred) {
+        jointCtx.clearRect(0, 0, DISPLAY_SIZE, DISPLAY_SIZE);
+        const scale = DISPLAY_SIZE / INPUT_SIZE;
+
+        // Draw connections
+        for (const [a, b] of JOINT_CONNECTIONS) {
+            const ax = uvPred[a * 2] * INPUT_SIZE * scale;
+            const ay = uvPred[a * 2 + 1] * INPUT_SIZE * scale;
+            const bx = uvPred[b * 2] * INPUT_SIZE * scale;
+            const by = uvPred[b * 2 + 1] * INPUT_SIZE * scale;
+
+            jointCtx.beginPath();
+            jointCtx.moveTo(ax, ay);
+            jointCtx.lineTo(bx, by);
+            jointCtx.strokeStyle = JOINT_COLORS[b] || '#fff';
+            jointCtx.lineWidth = 2;
+            jointCtx.stroke();
+        }
+
+        // Draw joints
+        for (let j = 0; j < NUM_JOINTS; j++) {
+            const x = uvPred[j * 2] * INPUT_SIZE * scale;
+            const y = uvPred[j * 2 + 1] * INPUT_SIZE * scale;
+
+            jointCtx.beginPath();
+            jointCtx.arc(x, y, 4, 0, Math.PI * 2);
+            jointCtx.fillStyle = JOINT_COLORS[j] || '#fff';
+            jointCtx.fill();
+            jointCtx.strokeStyle = '#fff';
+            jointCtx.lineWidth = 1;
+            jointCtx.stroke();
+        }
+    }
+
+    // --- Update Three.js mesh ---
+    function updateMesh(vertices) {
+        if (meshObj) {
+            scene.remove(meshObj);
+            meshObj.geometry.dispose();
+            meshObj.material.dispose();
+        }
+
+        const geometry = new THREE.BufferGeometry();
+        geometry.setAttribute('position', new THREE.BufferAttribute(vertices, 3));
+
+        const indices = [];
+        for (const face of faces) {
+            indices.push(face[0], face[1], face[2]);
+        }
+        geometry.setIndex(indices);
+        geometry.computeVertexNormals();
+
+        // Center the mesh
+        geometry.computeBoundingBox();
+        const center = new THREE.Vector3();
+        geometry.boundingBox.getCenter(center);
+        geometry.translate(-center.x, -center.y, -center.z);
+
+        const material = new THREE.MeshPhongMaterial({
+            color: 0xe94560,
+            specular: 0x444444,
+            shininess: 30,
+            side: THREE.DoubleSide,
+            flatShading: false
+        });
+
+        meshObj = new THREE.Mesh(geometry, material);
+        scene.add(meshObj);
+    }
+
+    // --- File upload ---
+    document.getElementById('uploadBtn').addEventListener('click', () => {
+        document.getElementById('fileInput').click();
+    });
+
+    document.getElementById('fileInput').addEventListener('change', (e) => {
+        const file = e.target.files[0];
+        if (!file) return;
+        stopWebcam();
+
+        const img = new Image();
+        img.onload = () => {
+            const tmpCanvas = document.createElement('canvas');
+            tmpCanvas.width = img.width;
+            tmpCanvas.height = img.height;
+            const ctx = tmpCanvas.getContext('2d');
+            ctx.drawImage(img, 0, 0);
+            runInference(tmpCanvas);
+            URL.revokeObjectURL(img.src);
+        };
+        img.src = URL.createObjectURL(file);
+        e.target.value = '';
+    });
+
+    // --- Webcam ---
+    document.getElementById('webcamBtn').addEventListener('click', async () => {
+        try {
+            webcamStream = await navigator.mediaDevices.getUserMedia({
+                video: {
+                    width: 256,
+                    height: 256,
+                    facingMode: 'environment'
+                }
+            });
+            const video = document.getElementById('webcam-video');
+            video.srcObject = webcamStream;
+            await video.play();
+
+            document.getElementById('webcamBtn').style.display = 'none';
+            document.getElementById('webcamStopBtn').style.display = 'block';
+
+            const captureCanvas = document.createElement('canvas');
+            captureCanvas.width = INPUT_SIZE;
+            captureCanvas.height = INPUT_SIZE;
+            const captureCtx = captureCanvas.getContext('2d');
+
+            async function captureFrame() {
+                if (!webcamStream) return;
+                captureCtx.save();
+                captureCtx.scale(-1, 1);
+                captureCtx.drawImage(video, -INPUT_SIZE, 0, INPUT_SIZE, INPUT_SIZE);
+                captureCtx.restore();
+                await runInference(captureCanvas);
+                webcamAnimId = requestAnimationFrame(captureFrame);
+            }
+
+            captureFrame();
+        } catch (err) {
+            alert('Failed to access webcam: ' + err.message);
+        }
+    });
+
+    function stopWebcam() {
+        if (webcamAnimId) {
+            cancelAnimationFrame(webcamAnimId);
+            webcamAnimId = null;
+        }
+        if (webcamStream) {
+            webcamStream.getTracks().forEach(t => t.stop());
+            webcamStream = null;
+        }
+        document.getElementById('webcamBtn').style.display = 'block';
+        document.getElementById('webcamStopBtn').style.display = 'none';
+    }
+
+    document.getElementById('webcamStopBtn').addEventListener('click', stopWebcam);
+
+    // --- Start ---
+    initThreeJS();
+    init();
+</script>
+</body>
+</html>
