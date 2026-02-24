@@ -15,7 +15,10 @@
       "Bash(curl:*)",
       "Bash(lsof:*)",
       "Bash(kill:*)",
-      "Bash(open:*)"
+      "Bash(open:*)",
+      "Bash(ipconfig getifaddr:*)",
+      "Bash(openssl req:*)",
+      "Bash(pip3 show:*)"
     ]
   }
 }

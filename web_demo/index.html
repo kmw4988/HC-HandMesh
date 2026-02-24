@@ -26,9 +26,11 @@
             color: #eee;
             display: flex;
             height: 100vh;
+            height: 100dvh;
             overflow: hidden;
         }
 
+        /* === Desktop: sidebar layout === */
         #sidebar {
             width: 260px;
             background: #16213e;
@@ -168,6 +170,121 @@
         #webcam-video {
             display: none;
         }
+
+        /* === Mobile: vertical stack layout === */
+        @media (max-width: 768px) {
+            body {
+                flex-direction: column;
+            }
+
+            #sidebar {
+                width: 100%;
+                flex-direction: row;
+                align-items: center;
+                padding: 10px 12px;
+                gap: 8px;
+                border-right: none;
+                border-bottom: 1px solid #0f3460;
+                flex-shrink: 0;
+                flex-wrap: wrap;
+            }
+
+            #sidebar h1 {
+                font-size: 15px;
+                margin-bottom: 0;
+                white-space: nowrap;
+            }
+
+            #sidebar > p {
+                display: none;
+            }
+
+            #sidebar .btn {
+                width: auto;
+                flex: 1;
+                min-width: 0;
+                padding: 10px 12px;
+                font-size: 13px;
+            }
+
+            #info-panel {
+                margin-top: 0;
+                display: flex;
+                gap: 10px;
+                padding: 8px 10px;
+                width: 100%;
+                order: 10;
+            }
+
+            #info-panel > div {
+                white-space: nowrap;
+            }
+
+            #main {
+                padding: 10px;
+                gap: 10px;
+                overflow: auto;
+                flex: 1;
+                min-height: 0;
+            }
+
+            #input-section {
+                display: block;
+                width: fit-content;
+                max-width: 300px;
+                margin: 0 auto;
+            }
+
+            #inputCanvas {
+                width: 100%;
+                height: auto;
+                display: block;
+            }
+
+            #jointCanvas {
+                width: 100%;
+                height: auto;
+            }
+
+            #viewer-container {
+                min-height: 250px;
+                flex: 1;
+            }
+
+            .panel-title {
+                font-size: 13px;
+                margin-bottom: 4px;
+            }
+        }
+
+        /* Small phones */
+        @media (max-width: 400px) {
+            #sidebar {
+                padding: 8px;
+                gap: 6px;
+            }
+
+            #sidebar h1 {
+                font-size: 13px;
+            }
+
+            #sidebar .btn {
+                padding: 8px 8px;
+                font-size: 12px;
+                border-radius: 6px;
+            }
+
+            #info-panel {
+                font-size: 10px;
+                gap: 6px;
+                padding: 6px 8px;
+            }
+
+            #main {
+                padding: 8px;
+                gap: 8px;
+            }
+        }
     </style>
 </head>
 <body>
@@ -177,20 +294,18 @@
 </div>
 
 <aside id="sidebar">
-    <div>
-        <h1>MobRecon Demo</h1>
-        <p>3D Hand Mesh Reconstruction</p>
-    </div>
+    <h1>MobRecon Demo</h1>
+    <p>3D Hand Mesh Reconstruction</p>
 
     <input type="file" id="fileInput" accept="image/*" hidden>
-    <button class="btn btn-primary" id="uploadBtn">Upload Image</button>
-    <button class="btn btn-secondary" id="webcamBtn">Webcam Capture</button>
-    <button class="btn btn-secondary" id="webcamStopBtn" style="display:none;">Stop Webcam</button>
+    <button class="btn btn-primary" id="uploadBtn">Upload</button>
+    <button class="btn btn-secondary" id="webcamBtn">Camera</button>
+    <button class="btn btn-secondary" id="webcamStopBtn" style="display:none;">Stop</button>
 
     <div id="info-panel">
         <div><span class="label">Status: </span><span class="value" id="statusText">Ready</span></div>
         <div><span class="label">Inference: </span><span class="value" id="inferenceTime">-</span></div>
-        <div><span class="label">Vertices: </span><span class="value">778</span></div>
+        <div><span class="label">Verts: </span><span class="value">778</span></div>
         <div><span class="label">Joints: </span><span class="value">21</span></div>
     </div>
 </aside>
@@ -215,7 +330,7 @@
     import * as THREE from 'three';
     import {OrbitControls} from 'three/addons/controls/OrbitControls.js';
 
-    const INPUT_SIZE = 128;
+    const INPUT_SIZE = 192;
     const DISPLAY_SIZE = 256;
     const NUM_VERTS = 778;
     const NUM_JOINTS = 21;
@@ -308,18 +423,21 @@
             const data = await resp.json();
             faces = data.faces;
 
-            ort.env.wasm.numThreads = Math.min(navigator.hardwareConcurrency || 4, 4);
+            const isMobile = /Android|iPhone|iPad|iPod/i.test(navigator.userAgent);
+
+            ort.env.wasm.numThreads = isMobile ? 1 : Math.min(navigator.hardwareConcurrency || 4, 4);
             ort.env.wasm.simd = true;
-            ort.env.wasm.proxy = true;
+            ort.env.wasm.proxy = !isMobile;
 
             ort.env.wasm.wasmPaths = 'https://cdn.jsdelivr.net/npm/onnxruntime-web@1.17.0/dist/';
-            session = await ort.InferenceSession.create('mobrecon_densestack.onnx', {
+            session = await ort.InferenceSession.create('mobrecon_mv4_v2.onnx', {
                 executionProviders: ['wasm'],
                 graphOptimizationLevel: 'all',
-                enableCpuMemArena: true,
+                enableCpuMemArena: !isMobile,
                 enableMemPattern: true,
                 freeDimensionOverrides: {batch: 1},
             });
+            if (isMobile) console.log('Mobile mode: single-thread, no proxy');
 
             statusText.textContent = 'Ready';
         } catch (e) {
@@ -372,8 +490,8 @@
         const t1 = performance.now();
         inferenceTime.textContent = `${(t1 - t0).toFixed(1)} ms`;
 
-        const meshPred = results.mesh_pred.data;   // [1, 778, 3]
-        const uvPred = results.uv_pred.data;       // [1, 21, 2]
+        const meshPred = results.verts.data;       // [1, 778, 3]
+        const uvPred = results.joint_img.data;     // [1, 21, 2]
 
         // Denormalize vertices (flip Y axis)
         const vertices = new Float32Array(NUM_VERTS * 3);
@@ -509,14 +627,26 @@
             captureCanvas.height = INPUT_SIZE;
             const captureCtx = captureCanvas.getContext('2d');
 
+            let isRunning = false;
+
             async function captureFrame() {
                 if (!webcamStream) return;
-                captureCtx.save();
-                captureCtx.scale(-1, 1);
-                captureCtx.drawImage(video, -INPUT_SIZE, 0, INPUT_SIZE, INPUT_SIZE);
-                captureCtx.restore();
-                await runInference(captureCanvas);
                 webcamAnimId = requestAnimationFrame(captureFrame);
+
+                if (isRunning) return; // skip if previous inference still running
+                isRunning = true;
+
+                try {
+                    captureCtx.save();
+                    captureCtx.scale(-1, 1);
+                    captureCtx.drawImage(video, -INPUT_SIZE, 0, INPUT_SIZE, INPUT_SIZE);
+                    captureCtx.restore();
+                    await runInference(captureCanvas);
+                } catch (e) {
+                    console.warn('Inference error:', e);
+                } finally {
+                    isRunning = false;
+                }
             }
 
             captureFrame();
